@@ -160,14 +160,53 @@ tab_overview, tab_matrices, tab_alltime, tab_raw = st.tabs(
 )
 
 with tab_overview:
-    col_left, col_right = st.columns([1.2, 1.0])
+    col_left, col_right = st.columns([1.25, 1.0])
 
     with col_left:
         st.subheader("Cumulative Points Trajectory")
-        traj_pivot = filtered_df.pivot(
-            index="Gameweek", columns="playerName", values="total_points"
+        # Order legend by latest standings so top managers appear first, and wrap legend via Vega-Lite spec
+        ordered_names = standings["playerName"].tolist()
+        traj_long = filtered_df[["Gameweek", "playerName", "total_points"]].copy()
+        traj_long["playerName"] = pd.Categorical(
+            traj_long["playerName"], categories=ordered_names, ordered=True
         )
-        st.line_chart(traj_pivot, height=400)
+        traj_long = traj_long.sort_values(["playerName", "Gameweek"])
+
+        vega_spec = {
+            "mark": {"type": "line", "point": True},
+            "encoding": {
+                "x": {
+                    "field": "Gameweek",
+                    "type": "ordinal",
+                    "title": "Gameweek",
+                    "axis": {"labelAngle": 0},
+                },
+                "y": {
+                    "field": "total_points",
+                    "type": "quantitative",
+                    "title": "Total Points",
+                },
+                "color": {
+                    "field": "playerName",
+                    "type": "nominal",
+                    "title": "Manager",
+                    "sort": ordered_names,
+                    "legend": {
+                        "orient": "bottom",
+                        "columns": 4,
+                        "labelLimit": 160,
+                        "symbolLimit": 50,
+                    },
+                },
+                "tooltip": [
+                    {"field": "playerName", "type": "nominal", "title": "Manager"},
+                    {"field": "Gameweek", "type": "ordinal", "title": "GW"},
+                    {"field": "total_points", "type": "quantitative", "title": "Total Pts"},
+                ],
+            },
+            "height": 460,
+        }
+        st.vega_lite_chart(traj_long, vega_spec, use_container_width=True)
 
     with col_right:
         st.subheader(f"GW {latest_gw} Standings")
@@ -193,12 +232,96 @@ with tab_overview:
             height=calc_table_height(len(standings)),
         )
 
-    st.subheader("Cumulative Points Left on Bench")
-    bench_chart_df = (
-        standings.sort_values("Season Bench Pts", ascending=True)
-        .set_index("playerName")[["Season Bench Pts"]]
+    st.divider()
+
+    # --- Option 1: Recent Form & Consistency ---
+    st.subheader("Recent Form & Consistency")
+    last3_cutoff = max(gw_min, latest_gw - 2)
+    last5_cutoff = max(gw_min, latest_gw - 4)
+
+    season_avg = (
+        filtered_df.groupby("playerName")["actualGameweekPoints"]
+        .mean()
+        .rename("Season Avg")
     )
-    st.bar_chart(bench_chart_df, horizontal=True, height=max(340, len(standings) * 26))
+    last5_avg = (
+        filtered_df[filtered_df["Gameweek"] >= last5_cutoff]
+        .groupby("playerName")["actualGameweekPoints"]
+        .mean()
+        .rename(f"Last {latest_gw - last5_cutoff + 1} GWs Avg")
+    )
+    last3_avg = (
+        filtered_df[filtered_df["Gameweek"] >= last3_cutoff]
+        .groupby("playerName")["actualGameweekPoints"]
+        .mean()
+        .rename(f"Last {latest_gw - last3_cutoff + 1} GWs Avg")
+    )
+    std_dev = (
+        filtered_df.groupby("playerName")["actualGameweekPoints"]
+        .std()
+        .fillna(0)
+        .rename("Volatility (Std Dev)")
+    )
+
+    form_df = (
+        pd.concat([season_avg, last5_avg, last3_avg, std_dev], axis=1)
+        .reset_index()
+        .rename(columns={"playerName": "Manager"})
+    )
+    last5_col = last5_avg.name
+    form_df["Form vs Avg"] = form_df[last5_col] - form_df["Season Avg"]
+    form_df = form_df.sort_values(last5_col, ascending=False).reset_index(drop=True)
+
+    for c in ["Season Avg", last5_col, last3_avg.name, "Volatility (Std Dev)", "Form vs Avg"]:
+        form_df[c] = form_df[c].round(1)
+
+    form_left, form_right = st.columns([1.15, 1.0])
+    with form_left:
+        st.caption(f"Comparing {last5_col} against Season Avg")
+        form_chart_long = form_df.melt(
+            id_vars=["Manager"],
+            value_vars=["Season Avg", last5_col],
+            var_name="Metric",
+            value_name="Avg Points",
+        )
+        form_vega = {
+            "mark": "bar",
+            "encoding": {
+                "y": {
+                    "field": "Manager",
+                    "type": "nominal",
+                    "sort": form_df["Manager"].tolist(),
+                    "title": None,
+                },
+                "yOffset": {"field": "Metric", "type": "nominal"},
+                "x": {
+                    "field": "Avg Points",
+                    "type": "quantitative",
+                    "title": "Average GW Points",
+                },
+                "color": {
+                    "field": "Metric",
+                    "type": "nominal",
+                    "legend": {"orient": "top", "title": None},
+                },
+                "tooltip": [
+                    {"field": "Manager", "type": "nominal"},
+                    {"field": "Metric", "type": "nominal"},
+                    {"field": "Avg Points", "type": "quantitative"},
+                ],
+            },
+            "height": max(380, len(form_df) * 28),
+        }
+        st.vega_lite_chart(form_chart_long, form_vega, use_container_width=True)
+
+    with form_right:
+        st.caption("Form & Consistency Breakdown")
+        st.dataframe(
+            form_df,
+            hide_index=True,
+            use_container_width=True,
+            height=calc_table_height(len(form_df)),
+        )
 
 with tab_matrices:
     ordered_managers = standings["playerName"].tolist()
