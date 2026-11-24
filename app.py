@@ -228,19 +228,10 @@ with tab_overview:
             }
         )
 
-        max_abs_delta = max(1, int(standings_display["Δ Pos"].abs().max()))
+        # Apply colour gradients only to Total Pts and GW Pts columns
         standings_styled = (
             standings_display.style
-            .background_gradient(subset=["Pos"], cmap="RdYlGn_r", axis=0)
             .background_gradient(subset=["Total Pts", gw_pts_col], cmap="RdYlGn", axis=0)
-            .background_gradient(subset=["Gap to Above"], cmap="Blues", axis=0)
-            .background_gradient(
-                subset=["Δ Pos"],
-                cmap="RdYlGn",
-                axis=0,
-                vmin=-max_abs_delta,
-                vmax=max_abs_delta,
-            )
             .format(
                 {
                     "Pos": "{:.0f}",
