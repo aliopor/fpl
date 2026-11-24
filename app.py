@@ -13,6 +13,7 @@ DATA_PATH = "data/fpl_history.csv"
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
+    df.columns = [c.strip() for c in df.columns]
     df["Season"] = df["Season"].astype(str).str.strip()
     df["Gameweek"] = pd.to_numeric(df["Gameweek"], errors="coerce")
     df = df.dropna(subset=["Season", "Gameweek", "playerName"]).copy()
@@ -26,6 +27,8 @@ def load_data(path: str) -> pd.DataFrame:
         "event_transfers_cost",
     ]:
         if col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.replace(",", "", regex=False)
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
@@ -47,18 +50,15 @@ if df.empty:
 
 seasons = sorted(df["Season"].unique())
 
-# --- Top Season Selector + Sidebar Filters ---
-header_col, season_col = st.columns([3, 1])
-with season_col:
-    selected_season = st.selectbox(
-        "Season",
-        options=seasons,
-        index=len(seasons) - 1,
-        key="season_selector",
-    )
-
+# --- Sidebar Filters (including Season dropdown) ---
 st.sidebar.header("Dashboard Filters")
-st.sidebar.info(f"Viewing Season: **{selected_season}** ({len(seasons)} seasons available)")
+
+selected_season = st.sidebar.selectbox(
+    "Season",
+    options=seasons,
+    index=len(seasons) - 1,
+    key="season_selector",
+)
 
 season_df = df[df["Season"] == selected_season].copy()
 min_gw, max_gw = int(season_df["Gameweek"].min()), int(season_df["Gameweek"].max())
@@ -122,9 +122,8 @@ bench_season = (
 standings = standings.merge(bench_season, on="playerName", how="left")
 
 # --- Header & KPIs ---
-with header_col:
-    st.title(f"⚽ FPL Mini-League Dashboard — {selected_season}")
-    st.caption(f"Showing Gameweeks {gw_min}–{gw_max} (Latest: GW {latest_gw})")
+st.title(f"⚽ FPL Mini-League Dashboard — {selected_season}")
+st.caption(f"Showing Gameweeks {gw_min}–{gw_max} (Latest: GW {latest_gw})")
 
 leader = standings.iloc[0]
 second_gap = (
@@ -224,15 +223,14 @@ with tab_matrices:
     pos_mat.index.name = "Manager"
     pos_mat.columns = [str(c) for c in pos_mat.columns]
 
-    # Compact column widths so all gameweeks fit cleanly without horizontal/vertical scrollbars
     compact_col_config = {
         "Manager": st.column_config.TextColumn("Manager", width="medium", pinned=True),
         **{col: st.column_config.NumberColumn(col, width=42) for col in pts_mat.columns},
     }
 
-    st.subheader("1. Gameweek Points Heatmap")
+    st.subheader("1. Gameweek Points Heatmap (Shaded Relative to Each Gameweek)")
     st.dataframe(
-        pts_mat.style.background_gradient(cmap="RdYlGn", axis=None).format(
+        pts_mat.style.background_gradient(cmap="RdYlGn", axis=0).format(
             "{:.0f}", na_rep="-"
         ),
         use_container_width=True,
@@ -245,7 +243,7 @@ with tab_matrices:
     st.subheader("2. Individual Gameweek Rankings (1 = Best in GW)")
     st.dataframe(
         gw_rank_mat.style.background_gradient(
-            cmap="RdYlGn_r", axis=None, vmin=1, vmax=max(1, num_managers)
+            cmap="RdYlGn_r", axis=0, vmin=1, vmax=max(1, num_managers)
         ),
         use_container_width=True,
         height=full_height,
@@ -257,7 +255,7 @@ with tab_matrices:
     st.subheader("3. Cumulative League Position Over Time (1 = 1st)")
     st.dataframe(
         pos_mat.style.background_gradient(
-            cmap="RdYlGn_r", axis=None, vmin=1, vmax=max(1, num_managers)
+            cmap="RdYlGn_r", axis=0, vmin=1, vmax=max(1, num_managers)
         ),
         use_container_width=True,
         height=full_height,
