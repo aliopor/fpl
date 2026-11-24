@@ -164,7 +164,6 @@ with tab_overview:
 
     with col_left:
         st.subheader("Cumulative Points Trajectory")
-        # Order legend by latest standings so top managers appear first, and wrap legend via Vega-Lite spec
         ordered_names = standings["playerName"].tolist()
         traj_long = filtered_df[["Gameweek", "playerName", "total_points"]].copy()
         traj_long["playerName"] = pd.Categorical(
@@ -204,37 +203,66 @@ with tab_overview:
                     {"field": "total_points", "type": "quantitative", "title": "Total Pts"},
                 ],
             },
-            "height": 600,
+            "height": 460,
         }
         st.vega_lite_chart(traj_long, vega_spec, use_container_width=True)
 
     with col_right:
         st.subheader(f"GW {latest_gw} Standings")
-        display_cols = [
-            "Pos",
-            "playerName",
-            "total_points",
-            "actualGameweekPoints",
-            "Gap to Above",
-            "Change in position",
-        ]
+        gw_pts_col = f"GW {latest_gw} Pts"
+        standings_display = standings[
+            [
+                "Pos",
+                "playerName",
+                "total_points",
+                "actualGameweekPoints",
+                "Gap to Above",
+                "Change in position",
+            ]
+        ].rename(
+            columns={
+                "playerName": "Manager",
+                "total_points": "Total Pts",
+                "actualGameweekPoints": gw_pts_col,
+                "Change in position": "Δ Pos",
+            }
+        )
+
+        max_abs_delta = max(1, int(standings_display["Δ Pos"].abs().max()))
+        standings_styled = (
+            standings_display.style
+            .background_gradient(subset=["Pos"], cmap="RdYlGn_r", axis=0)
+            .background_gradient(subset=["Total Pts", gw_pts_col], cmap="RdYlGn", axis=0)
+            .background_gradient(subset=["Gap to Above"], cmap="Blues", axis=0)
+            .background_gradient(
+                subset=["Δ Pos"],
+                cmap="RdYlGn",
+                axis=0,
+                vmin=-max_abs_delta,
+                vmax=max_abs_delta,
+            )
+            .format(
+                {
+                    "Pos": "{:.0f}",
+                    "Total Pts": "{:.0f}",
+                    gw_pts_col: "{:.0f}",
+                    "Gap to Above": "{:.0f}",
+                    "Δ Pos": "{:+d}",
+                },
+                na_rep="-",
+            )
+        )
+
         st.dataframe(
-            standings[display_cols].rename(
-                columns={
-                    "playerName": "Manager",
-                    "total_points": "Total Pts",
-                    "actualGameweekPoints": f"GW {latest_gw} Pts",
-                    "Change in position": "Δ Pos",
-                }
-            ),
+            standings_styled,
             hide_index=True,
             use_container_width=True,
-            height=calc_table_height(len(standings)),
+            height=calc_table_height(len(standings_display)),
         )
 
     st.divider()
 
-    # --- Option 1: Recent Form & Consistency ---
+    # --- Recent Form & Consistency ---
     st.subheader("Recent Form & Consistency")
     last3_cutoff = max(gw_min, latest_gw - 2)
     last5_cutoff = max(gw_min, latest_gw - 4)
