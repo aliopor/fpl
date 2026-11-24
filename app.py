@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="FPL Mini-League Dashboard",
+    page_title="FPL Windlab League Dashboard",
     page_icon="⚽",
     layout="wide",
 )
@@ -122,7 +122,7 @@ bench_season = (
 standings = standings.merge(bench_season, on="playerName", how="left")
 
 # --- Header & KPIs ---
-st.title(f"⚽ FPL Mini-League Dashboard — {selected_season}")
+st.title(f"⚽ FPL Windlab League Dashboard — {selected_season}")
 st.caption(f"Showing Gameweeks {gw_min}–{gw_max} (Latest: GW {latest_gw})")
 
 leader = standings.iloc[0]
