@@ -204,7 +204,7 @@ with tab_overview:
                     {"field": "total_points", "type": "quantitative", "title": "Total Pts"},
                 ],
             },
-            "height": 460,
+            "height": 600,
         }
         st.vega_lite_chart(traj_long, vega_spec, use_container_width=True)
 
