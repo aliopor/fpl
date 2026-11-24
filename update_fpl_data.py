@@ -5,8 +5,8 @@ import requests
 
 LEAGUE_ID = 752891
 SEASON = "2026-2027"
-OUTPUT_CSV = Path("data/fpl_history.csv")  # Change to Path("scores.csv") if preferred
-OVERWRITE_ONLY_ACTIVE_SEASON = True       # Keeps older seasons in OUTPUT_CSV if present
+OUTPUT_CSV = Path("data/fpl_history.csv")
+OVERWRITE_ONLY_ACTIVE_SEASON = True
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; FPL-League-Tracker/1.0)"
@@ -20,7 +20,6 @@ def fetch_json(url: str, session: requests.Session) -> dict:
 
 
 def get_league_entries(league_id: int, session: requests.Session) -> pd.DataFrame:
-    """Fetch all classic league standings entries (handles pagination if >50 teams)."""
     entries = []
     page = 1
 
@@ -41,7 +40,6 @@ def get_league_entries(league_id: int, session: requests.Session) -> pd.DataFram
 
 
 def download_season_scores(league_id: int, season: str) -> pd.DataFrame:
-    """Download full gameweek-by-gameweek history for all managers in the league."""
     all_rows = []
 
     with requests.Session() as session:
@@ -58,8 +56,6 @@ def download_season_scores(league_id: int, season: str) -> pd.DataFrame:
             current_df["playerID"] = int(entry_id)
             current_df["playerName"] = player_name
             all_rows.append(current_df)
-
-            # Polite small pause between requests
             time.sleep(0.15)
 
     if not all_rows:
@@ -67,7 +63,6 @@ def download_season_scores(league_id: int, season: str) -> pd.DataFrame:
 
     scores_df = pd.concat(all_rows, ignore_index=True)
 
-    # Match Book1.csv / dashboard naming conventions
     if "event" in scores_df.columns and "Gameweek" not in scores_df.columns:
         scores_df = scores_df.rename(columns={"event": "Gameweek"})
 
@@ -76,7 +71,6 @@ def download_season_scores(league_id: int, season: str) -> pd.DataFrame:
     )
     scores_df["Season"] = season
 
-    # Put key columns first, keeping any additional FPL API fields
     preferred_order = [
         "Gameweek",
         "points",
@@ -97,9 +91,11 @@ def download_season_scores(league_id: int, season: str) -> pd.DataFrame:
     ordered_cols = [c for c in preferred_order if c in scores_df.columns] + [
         c for c in scores_df.columns if c not in preferred_order
     ]
-    scores_df = scores_df[ordered_cols].sort_values(
-        ["Gameweek", "total_points"], ascending=[True, False]
-    ).reset_index(drop=True)
+    scores_df = (
+        scores_df[ordered_cols]
+        .sort_values(["Gameweek", "total_points"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
 
     return scores_df
 
@@ -110,13 +106,11 @@ def save_scores(new_season_df: pd.DataFrame, output_path: Path, overwrite_only_s
     if overwrite_only_season and output_path.exists():
         existing_df = pd.read_csv(output_path)
         if "Season" in existing_df.columns:
-            # Drop only the active season's rows so historical seasons stay intact
             kept_df = existing_df[existing_df["Season"].astype(str) != SEASON]
             final_df = pd.concat([kept_df, new_season_df], ignore_index=True)
         else:
             final_df = new_season_df
     else:
-        # Full file overwrite
         final_df = new_season_df
 
     final_df.to_csv(output_path, index=False)

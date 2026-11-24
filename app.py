@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -14,9 +13,9 @@ DATA_PATH = "data/fpl_history.csv"
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
-    df["Season"] = df["Season"].astype(str)
+    df["Season"] = df["Season"].astype(str).str.strip()
     df["Gameweek"] = pd.to_numeric(df["Gameweek"], errors="coerce")
-    df = df.dropna(subset=["Gameweek"]).copy()
+    df = df.dropna(subset=["Season", "Gameweek", "playerName"]).copy()
     df["Gameweek"] = df["Gameweek"].astype(int)
     for col in [
         "points",
@@ -31,6 +30,11 @@ def load_data(path: str) -> pd.DataFrame:
     return df
 
 
+def calc_table_height(num_rows: int) -> int:
+    """Return exact pixel height so all rows fit without vertical scrolling."""
+    return int((num_rows + 1) * 35 + 12)
+
+
 try:
     df = load_data(DATA_PATH)
 except FileNotFoundError:
@@ -41,15 +45,20 @@ if df.empty:
     st.warning("Your dataset is empty.")
     st.stop()
 
-# --- Sidebar Filters ---
-st.sidebar.header("Dashboard Filters")
-
 seasons = sorted(df["Season"].unique())
-selected_season = st.sidebar.selectbox(
-    "Season",
-    options=seasons,
-    index=len(seasons) - 1,
-)
+
+# --- Top Season Selector + Sidebar Filters ---
+header_col, season_col = st.columns([3, 1])
+with season_col:
+    selected_season = st.selectbox(
+        "Season",
+        options=seasons,
+        index=len(seasons) - 1,
+        key="season_selector",
+    )
+
+st.sidebar.header("Dashboard Filters")
+st.sidebar.info(f"Viewing Season: **{selected_season}** ({len(seasons)} seasons available)")
 
 season_df = df[df["Season"] == selected_season].copy()
 min_gw, max_gw = int(season_df["Gameweek"].min()), int(season_df["Gameweek"].max())
@@ -100,8 +109,8 @@ if prev_gw is not None and not filtered_df[filtered_df["Gameweek"] == prev_gw].e
         .rank(ascending=False, method="min")
     )
     standings["Change in position"] = (
-        standings["playerName"].map(prev_pos) - standings["Pos"]
-    ).fillna(0).astype(int)
+        (standings["playerName"].map(prev_pos) - standings["Pos"]).fillna(0).astype(int)
+    )
 else:
     standings["Change in position"] = 0
 
@@ -113,16 +122,25 @@ bench_season = (
 standings = standings.merge(bench_season, on="playerName", how="left")
 
 # --- Header & KPIs ---
-st.title(f"⚽ FPL Mini-League Dashboard — {selected_season}")
-st.caption(f"Showing Gameweeks {gw_min}–{gw_max} (Latest: GW {latest_gw})")
+with header_col:
+    st.title(f"⚽ FPL Mini-League Dashboard — {selected_season}")
+    st.caption(f"Showing Gameweeks {gw_min}–{gw_max} (Latest: GW {latest_gw})")
 
 leader = standings.iloc[0]
-second_gap = int(standings.iloc[1]["Gap to Above"]) if len(standings) > 1 and pd.notna(standings.iloc[1]["Gap to Above"]) else 0
+second_gap = (
+    int(standings.iloc[1]["Gap to Above"])
+    if len(standings) > 1 and pd.notna(standings.iloc[1]["Gap to Above"])
+    else 0
+)
 top_bench = standings.sort_values("Season Bench Pts", ascending=False).iloc[0]
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("League Leader", f"{leader['playerName']}", f"{int(leader['total_points'])} pts")
-k2.metric("#1 vs #2 Gap", f"{second_gap} pts", standings.iloc[1]["playerName"] if len(standings) > 1 else "")
+k2.metric(
+    "#1 vs #2 Gap",
+    f"{second_gap} pts",
+    standings.iloc[1]["playerName"] if len(standings) > 1 else "",
+)
 k3.metric("Avg GW Score", f"{filtered_df['actualGameweekPoints'].mean():.1f} pts")
 k4.metric(
     "Most Bench Pts",
@@ -133,8 +151,13 @@ k4.metric(
 st.divider()
 
 # --- Tabs for Visualisations & Matrices ---
-tab_overview, tab_matrices, tab_raw = st.tabs(
-    ["📈 Standings & Charts", "🔥 GW & Position Matrices", "📄 Data Table"]
+tab_overview, tab_matrices, tab_alltime, tab_raw = st.tabs(
+    [
+        "📈 Standings & Charts",
+        "🔥 GW & Position Matrices",
+        "🏆 All-Time Seasons",
+        "📄 Data Table",
+    ]
 )
 
 with tab_overview:
@@ -145,7 +168,7 @@ with tab_overview:
         traj_pivot = filtered_df.pivot(
             index="Gameweek", columns="playerName", values="total_points"
         )
-        st.line_chart(traj_pivot, height=360)
+        st.line_chart(traj_pivot, height=400)
 
     with col_right:
         st.subheader(f"GW {latest_gw} Standings")
@@ -168,7 +191,7 @@ with tab_overview:
             ),
             hide_index=True,
             use_container_width=True,
-            height=360,
+            height=calc_table_height(len(standings)),
         )
 
     st.subheader("Cumulative Points Left on Bench")
@@ -176,18 +199,21 @@ with tab_overview:
         standings.sort_values("Season Bench Pts", ascending=True)
         .set_index("playerName")[["Season Bench Pts"]]
     )
-    st.bar_chart(bench_chart_df, horizontal=True, height=340)
+    st.bar_chart(bench_chart_df, horizontal=True, height=max(340, len(standings) * 26))
 
 with tab_matrices:
     ordered_managers = standings["playerName"].tolist()
+    num_managers = len(ordered_managers)
+    full_height = calc_table_height(num_managers)
 
     pts_mat = filtered_df.pivot(
         index="playerName", columns="Gameweek", values="actualGameweekPoints"
     ).reindex(ordered_managers)
+    pts_mat.index.name = "Manager"
+    pts_mat.columns = [str(c) for c in pts_mat.columns]
 
-    gw_rank_mat = (
-        pts_mat.rank(axis=0, ascending=False, method="min").astype("Int64")
-    )
+    gw_rank_mat = pts_mat.rank(axis=0, ascending=False, method="min").astype("Int64")
+    gw_rank_mat.index.name = "Manager"
 
     pos_mat = (
         filtered_df.pivot(index="playerName", columns="Gameweek", values="total_points")
@@ -195,29 +221,114 @@ with tab_matrices:
         .rank(axis=0, ascending=False, method="min")
         .astype("Int64")
     )
+    pos_mat.index.name = "Manager"
+    pos_mat.columns = [str(c) for c in pos_mat.columns]
+
+    # Compact column widths so all gameweeks fit cleanly without horizontal/vertical scrollbars
+    compact_col_config = {
+        "Manager": st.column_config.TextColumn("Manager", width="medium", pinned=True),
+        **{col: st.column_config.NumberColumn(col, width=42) for col in pts_mat.columns},
+    }
 
     st.subheader("1. Gameweek Points Heatmap")
     st.dataframe(
-        pts_mat.style.background_gradient(cmap="RdYlGn", axis=None).format("{:.0f}", na_rep="-"),
+        pts_mat.style.background_gradient(cmap="RdYlGn", axis=None).format(
+            "{:.0f}", na_rep="-"
+        ),
         use_container_width=True,
+        height=full_height,
+        column_config=compact_col_config,
     )
+
+    st.markdown("---")
 
     st.subheader("2. Individual Gameweek Rankings (1 = Best in GW)")
     st.dataframe(
-        gw_rank_mat.style.background_gradient(cmap="RdYlGn_r", axis=None, vmin=1, vmax=len(ordered_managers)),
+        gw_rank_mat.style.background_gradient(
+            cmap="RdYlGn_r", axis=None, vmin=1, vmax=max(1, num_managers)
+        ),
         use_container_width=True,
+        height=full_height,
+        column_config=compact_col_config,
     )
+
+    st.markdown("---")
 
     st.subheader("3. Cumulative League Position Over Time (1 = 1st)")
     st.dataframe(
-        pos_mat.style.background_gradient(cmap="RdYlGn_r", axis=None, vmin=1, vmax=len(ordered_managers)),
+        pos_mat.style.background_gradient(
+            cmap="RdYlGn_r", axis=None, vmin=1, vmax=max(1, num_managers)
+        ),
         use_container_width=True,
+        height=full_height,
+        column_config=compact_col_config,
+    )
+
+with tab_alltime:
+    st.subheader("Multi-Season Summary (All Available Seasons)")
+    final_gws = df.groupby(["Season", "playerName"], as_index=False)["Gameweek"].max()
+    season_finals = df.merge(final_gws, on=["Season", "playerName", "Gameweek"])
+    season_finals["Season Pos"] = (
+        season_finals.groupby("Season")["total_points"]
+        .rank(ascending=False, method="min")
+        .astype(int)
+    )
+
+    all_time_summary = (
+        df.groupby("playerName", as_index=False)
+        .agg(
+            Seasons_Played=("Season", "nunique"),
+            Total_GWs=("Gameweek", "count"),
+            Avg_GW_Pts=("actualGameweekPoints", "mean"),
+            Best_GW=("actualGameweekPoints", "max"),
+            Total_Bench_Pts=("points_on_bench", "sum"),
+        )
+        .merge(
+            season_finals.groupby("playerName", as_index=False).agg(
+                Titles=("Season Pos", lambda s: int((s == 1).sum())),
+                Podiums=("Season Pos", lambda s: int((s <= 3).sum())),
+                Best_Finish=("Season Pos", "min"),
+            ),
+            on="playerName",
+            how="left",
+        )
+        .sort_values(["Titles", "Podiums", "Avg_GW_Pts"], ascending=[False, False, False])
+    )
+    all_time_summary["Avg_GW_Pts"] = all_time_summary["Avg_GW_Pts"].round(1)
+
+    st.dataframe(
+        all_time_summary.rename(
+            columns={
+                "playerName": "Manager",
+                "Seasons_Played": "Seasons",
+                "Total_GWs": "GWs",
+                "Avg_GW_Pts": "Avg GW Pts",
+                "Best_GW": "Best GW",
+                "Total_Bench_Pts": "Total Bench Pts",
+                "Best_Finish": "Best Finish",
+            }
+        ),
+        hide_index=True,
+        use_container_width=True,
+        height=calc_table_height(len(all_time_summary)),
+    )
+
+    st.subheader("Final / Latest Points by Season")
+    season_comp = season_finals.pivot(
+        index="playerName", columns="Season", values="total_points"
+    )
+    st.dataframe(
+        season_comp.style.format("{:.0f}", na_rep="-"),
+        use_container_width=True,
+        height=calc_table_height(len(season_comp)),
     )
 
 with tab_raw:
     st.subheader("Filtered Gameweek Records")
     st.dataframe(
-        filtered_df.sort_values(["Season", "Gameweek", "total_points"], ascending=[True, True, False]),
+        filtered_df.sort_values(
+            ["Season", "Gameweek", "total_points"], ascending=[True, True, False]
+        ),
         hide_index=True,
         use_container_width=True,
     )
