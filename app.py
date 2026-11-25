@@ -90,24 +90,43 @@ if filtered_df.empty:
     st.info("No rows match the current filter selection.")
     st.stop()
 
-# --- Core Standings & Deltas at Selected End Gameweek ---
+# --- Core Standings & Deltas Across Selected Gameweek Range ---
 latest_gw = int(filtered_df["Gameweek"].max())
 prev_gw = latest_gw - 1 if latest_gw > gw_min else None
 
-standings = (
-    filtered_df[filtered_df["Gameweek"] == latest_gw]
-    .sort_values("total_points", ascending=False)
-    .reset_index(drop=True)
-)
-standings["Pos"] = standings["total_points"].rank(ascending=False, method="min").astype(int)
-standings["Gap to Above"] = standings["total_points"].shift(1) - standings["total_points"]
+standings = filtered_df[filtered_df["Gameweek"] == latest_gw].copy()
+
+if gw_min == min_gw:
+    standings["Range Pts"] = standings["total_points"]
+    range_pts_label = "Total Pts"
+else:
+    range_sums = (
+        filtered_df.groupby("playerName", as_index=False)["actualGameweekPoints"]
+        .sum()
+        .rename(columns={"actualGameweekPoints": "Range Pts"})
+    )
+    standings = standings.drop(columns=["Range Pts"], errors="ignore").merge(
+        range_sums, on="playerName", how="left"
+    )
+    range_pts_label = f"GW {gw_min}–{gw_max} Pts"
+
+standings = standings.sort_values("Range Pts", ascending=False).reset_index(drop=True)
+standings["Pos"] = standings["Range Pts"].rank(ascending=False, method="min").astype(int)
+standings["Gap to Above"] = standings["Range Pts"].shift(1) - standings["Range Pts"]
 
 if prev_gw is not None and not filtered_df[filtered_df["Gameweek"] == prev_gw].empty:
-    prev_pos = (
-        filtered_df[filtered_df["Gameweek"] == prev_gw]
-        .set_index("playerName")["total_points"]
-        .rank(ascending=False, method="min")
-    )
+    if gw_min == min_gw:
+        prev_scores = (
+            filtered_df[filtered_df["Gameweek"] == prev_gw]
+            .set_index("playerName")["total_points"]
+        )
+    else:
+        prev_scores = (
+            filtered_df[filtered_df["Gameweek"] <= prev_gw]
+            .groupby("playerName")["actualGameweekPoints"]
+            .sum()
+        )
+    prev_pos = prev_scores.rank(ascending=False, method="min")
     standings["Change in position"] = (
         (standings["playerName"].map(prev_pos) - standings["Pos"]).fillna(0).astype(int)
     )
@@ -134,7 +153,7 @@ second_gap = (
 top_bench = standings.sort_values("Season Bench Pts", ascending=False).iloc[0]
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("League Leader", f"{leader['playerName']}", f"{int(leader['total_points'])} pts")
+k1.metric("League Leader", f"{leader['playerName']}", f"{int(leader['Range Pts'])} pts")
 k2.metric(
     "#1 vs #2 Gap",
     f"{second_gap} pts",
@@ -208,13 +227,18 @@ with tab_overview:
         st.vega_lite_chart(traj_long, vega_spec, use_container_width=True)
 
     with col_right:
-        st.subheader(f"GW {latest_gw} Standings")
+        standings_heading = (
+            f"GW {latest_gw} Standings"
+            if gw_min == min_gw
+            else f"Standings (GW {gw_min}–{gw_max})"
+        )
+        st.subheader(standings_heading)
         gw_pts_col = f"GW {latest_gw} Pts"
         standings_display = standings[
             [
                 "Pos",
                 "playerName",
-                "total_points",
+                "Range Pts",
                 "actualGameweekPoints",
                 "Gap to Above",
                 "Change in position",
@@ -222,20 +246,22 @@ with tab_overview:
         ].rename(
             columns={
                 "playerName": "Manager",
-                "total_points": "Total Pts",
+                "Range Pts": range_pts_label,
                 "actualGameweekPoints": gw_pts_col,
                 "Change in position": "Δ Pos",
             }
         )
 
-        # Apply colour gradients only to Total Pts and GW Pts columns
+        # Apply colour gradients only to range/total points and GW Pts columns
         standings_styled = (
             standings_display.style
-            .background_gradient(subset=["Total Pts", gw_pts_col], cmap="RdYlGn", axis=0)
+            .background_gradient(
+                subset=[range_pts_label, gw_pts_col], cmap="RdYlGn", axis=0
+            )
             .format(
                 {
                     "Pos": "{:.0f}",
-                    "Total Pts": "{:.0f}",
+                    range_pts_label: "{:.0f}",
                     gw_pts_col: "{:.0f}",
                     "Gap to Above": "{:.0f}",
                     "Δ Pos": "{:+d}",
@@ -406,6 +432,15 @@ with tab_matrices:
 
 with tab_alltime:
     st.subheader("Multi-Season Summary (All Available Seasons)")
+    season_max_gws = (
+        df.groupby("Season", as_index=False)["Gameweek"]
+        .max()
+        .rename(columns={"Gameweek": "Season_Max_GW"})
+    )
+    completed_seasons = set(
+        season_max_gws[season_max_gws["Season_Max_GW"] >= 38]["Season"]
+    )
+
     final_gws = df.groupby(["Season", "playerName"], as_index=False)["Gameweek"].max()
     season_finals = df.merge(final_gws, on=["Season", "playerName", "Gameweek"])
     season_finals["Season Pos"] = (
@@ -413,6 +448,18 @@ with tab_alltime:
         .rank(ascending=False, method="min")
         .astype(int)
     )
+
+    completed_finals = season_finals[season_finals["Season"].isin(completed_seasons)]
+    if completed_finals.empty:
+        honours_df = pd.DataFrame(
+            columns=["playerName", "Titles", "Podiums", "Best_Finish"]
+        )
+    else:
+        honours_df = completed_finals.groupby("playerName", as_index=False).agg(
+            Titles=("Season Pos", lambda s: int((s == 1).sum())),
+            Podiums=("Season Pos", lambda s: int((s <= 3).sum())),
+            Best_Finish=("Season Pos", "min"),
+        )
 
     all_time_summary = (
         df.groupby("playerName", as_index=False)
@@ -423,18 +470,22 @@ with tab_alltime:
             Best_GW=("actualGameweekPoints", "max"),
             Total_Bench_Pts=("points_on_bench", "sum"),
         )
-        .merge(
-            season_finals.groupby("playerName", as_index=False).agg(
-                Titles=("Season Pos", lambda s: int((s == 1).sum())),
-                Podiums=("Season Pos", lambda s: int((s <= 3).sum())),
-                Best_Finish=("Season Pos", "min"),
-            ),
-            on="playerName",
-            how="left",
-        )
-        .sort_values(["Titles", "Podiums", "Avg_GW_Pts"], ascending=[False, False, False])
+        .merge(honours_df, on="playerName", how="left")
     )
+    all_time_summary["Titles"] = all_time_summary["Titles"].fillna(0).astype(int)
+    all_time_summary["Podiums"] = all_time_summary["Podiums"].fillna(0).astype(int)
+    all_time_summary["Best_Finish"] = all_time_summary["Best_Finish"].astype("Int64")
     all_time_summary["Avg_GW_Pts"] = all_time_summary["Avg_GW_Pts"].round(1)
+    all_time_summary = all_time_summary.sort_values(
+        ["Titles", "Podiums", "Avg_GW_Pts"], ascending=[False, False, False]
+    )
+
+    if completed_seasons:
+        st.caption(
+            f"Titles, Podiums, and Best Finish count completed 38-GW seasons only ({', '.join(sorted(completed_seasons))})."
+        )
+    else:
+        st.caption("No completed 38-GW seasons yet.")
 
     st.dataframe(
         all_time_summary.rename(
