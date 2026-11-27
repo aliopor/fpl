@@ -522,6 +522,11 @@ with tab_sim:
                 **{col: st.column_config.NumberColumn(col, width=42) for col in prob_pct.columns},
             }
 
+            # Power-curved gmap (gamma = 0.45) spreads mid-range odds (4%–15%) across
+            # the yellow/amber/orange range of RdYlGn_r, matching Excel's 3-color conditional scale
+            max_prob_val = max(1, int(prob_pct.values.max()))
+            norm_gmap = np.power(np.clip(prob_pct.values / max_prob_val, 0.0, 1.0), 0.45)
+
             st.caption(
                 f"End-of-season finish position probabilities (%) simulated after GW {sim_gw}."
             )
@@ -529,8 +534,9 @@ with tab_sim:
                 prob_pct.style.background_gradient(
                     cmap="RdYlGn_r",
                     axis=None,
-                    vmin=1,
-                    vmax=max(1, int(prob_pct.values.max())),
+                    gmap=norm_gmap,
+                    vmin=0.0,
+                    vmax=1.0,
                 ).format("{:d}"),
                 use_container_width=True,
                 height=calc_table_height(len(prob_pct)),
