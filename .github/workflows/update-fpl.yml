@@ -2,7 +2,8 @@ name: Update FPL League Scores
 
 on:
   schedule:
-    - cron: "0 8 * * 1,2,5,6,7"
+    # Runs once a week on Tuesday at 18:00 UTC (adjust hour if you want 6:00 PM local/AEDT)
+    - cron: "0 18 * * 2"
   workflow_dispatch: {}
 
 permissions:

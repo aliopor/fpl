@@ -168,7 +168,26 @@ second_gap = (
     if len(standings) > 1 and pd.notna(standings.iloc[1]["Gap to Above"])
     else 0
 )
-top_bench = standings.sort_values("Season Bench Pts", ascending=False).iloc[0]
+
+# Determine likely title winner and win % from predictions.csv (if available for selected season)
+pred_path = Path(PREDICTIONS_PATH)
+likely_winner_name = "—"
+likely_winner_delta = "No simulation data"
+if pred_path.exists():
+    pred_df_kpi = load_predictions(PREDICTIONS_PATH)
+    season_preds_kpi = pred_df_kpi[
+        (pred_df_kpi["Season"] == selected_season) & (pred_df_kpi["Position"] == 1)
+    ]
+    if not season_preds_kpi.empty:
+        avail_kpi_gws = sorted(season_preds_kpi["Gameweek"].unique())
+        kpi_gw = gw_max if gw_max in avail_kpi_gws else avail_kpi_gws[-1]
+        gw_win_odds = season_preds_kpi[season_preds_kpi["Gameweek"] == kpi_gw].sort_values(
+            "Odds", ascending=False
+        )
+        if not gw_win_odds.empty:
+            top_sim = gw_win_odds.iloc[0]
+            likely_winner_name = str(top_sim["Player"])
+            likely_winner_delta = f"{top_sim['Odds'] * 100:.1f}% title odds (GW {kpi_gw})"
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("League Leader", f"{leader['playerName']}", f"{int(leader['Range Pts'])} pts")
@@ -179,9 +198,9 @@ k2.metric(
 )
 k3.metric("Avg GW Score", f"{filtered_df['actualGameweekPoints'].mean():.1f} pts")
 k4.metric(
-    "Most Bench Pts",
-    f"{top_bench['playerName']}",
-    f"{int(top_bench['Season Bench Pts'])} pts",
+    "Likely Title Winner",
+    likely_winner_name,
+    likely_winner_delta,
 )
 
 st.divider()
