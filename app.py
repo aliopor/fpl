@@ -1,3 +1,5 @@
+from pathlib import Path
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -8,6 +10,7 @@ st.set_page_config(
 )
 
 DATA_PATH = "data/fpl_history.csv"
+PREDICTIONS_PATH = "data/predictions.csv"
 
 
 @st.cache_data
@@ -31,6 +34,21 @@ def load_data(path: str) -> pd.DataFrame:
                 df[col] = df[col].astype(str).str.replace(",", "", regex=False)
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
+
+
+@st.cache_data
+def load_predictions(path: str) -> pd.DataFrame:
+    pred = pd.read_csv(path)
+    pred.columns = [c.strip() for c in pred.columns]
+    pred["Season"] = pred["Season"].astype(str).str.strip()
+    pred["Player"] = pred["Player"].astype(str).str.strip()
+    pred["Gameweek"] = pd.to_numeric(pred["Gameweek"], errors="coerce")
+    pred["Position"] = pd.to_numeric(pred["Position"], errors="coerce")
+    pred["Odds"] = pd.to_numeric(pred["Odds"], errors="coerce")
+    pred = pred.dropna(subset=["Player", "Gameweek", "Position", "Odds", "Season"]).copy()
+    pred["Gameweek"] = pred["Gameweek"].astype(int)
+    pred["Position"] = pred["Position"].astype(int)
+    return pred
 
 
 def calc_table_height(num_rows: int) -> int:
@@ -169,10 +187,11 @@ k4.metric(
 st.divider()
 
 # --- Tabs for Visualisations & Matrices ---
-tab_overview, tab_matrices, tab_alltime, tab_raw = st.tabs(
+tab_overview, tab_matrices, tab_sim, tab_alltime, tab_raw = st.tabs(
     [
         "📈 Standings & Charts",
         "🔥 GW & Position Matrices",
+        "🎲 Season Predictions",
         "🏆 All-Time Seasons",
         "📄 Data Table",
     ]
@@ -429,6 +448,125 @@ with tab_matrices:
         height=full_height,
         column_config=compact_col_config,
     )
+
+with tab_sim:
+    st.subheader(f"Monte Carlo Season Finish Probabilities — {selected_season}")
+    pred_path = Path(PREDICTIONS_PATH)
+
+    if pred_path.exists():
+        pred_df = load_predictions(PREDICTIONS_PATH)
+        season_preds = pred_df[pred_df["Season"] == selected_season].copy()
+
+        if not season_preds.empty:
+            avail_sim_gws = sorted(season_preds["Gameweek"].unique())
+            default_gw_idx = (
+                avail_sim_gws.index(gw_max)
+                if gw_max in avail_sim_gws
+                else len(avail_sim_gws) - 1
+            )
+            sim_gw = st.selectbox(
+                "Simulation Snapshot (After Gameweek)",
+                options=avail_sim_gws,
+                index=default_gw_idx,
+                key="sim_gw_selector",
+            )
+
+            gw_sim = season_preds[season_preds["Gameweek"] == sim_gw].copy()
+            if selected_managers:
+                gw_sim_filtered = gw_sim[gw_sim["Player"].isin(selected_managers)]
+            else:
+                gw_sim_filtered = gw_sim
+
+            prob_pivot = (
+                gw_sim_filtered.pivot(index="Player", columns="Position", values="Odds")
+                .fillna(0.0)
+            )
+            positions = sorted(prob_pivot.columns)
+            exp_pos = (prob_pivot[positions].values * np.array(positions)).sum(axis=1)
+
+            order = (
+                prob_pivot.assign(
+                    _p1=prob_pivot.get(1, 0.0),
+                    _podium=prob_pivot[[p for p in positions if p <= 3]].sum(axis=1),
+                    _ep=exp_pos,
+                )
+                .sort_values(["_p1", "_podium", "_ep"], ascending=[False, False, True])
+                .index
+            )
+
+            prob_pct = (prob_pivot.loc[order, positions] * 100).round(0).astype(int)
+            prob_pct.index.name = "Manager"
+            prob_pct.columns = [str(p) for p in prob_pct.columns]
+
+            sim_col_config = {
+                "Manager": st.column_config.TextColumn("Manager", width="medium", pinned=True),
+                **{col: st.column_config.NumberColumn(col, width=42) for col in prob_pct.columns},
+            }
+
+            st.caption(
+                f"End-of-season finish position probabilities (%) simulated after GW {sim_gw}."
+            )
+            st.dataframe(
+                prob_pct.style.background_gradient(
+                    cmap="RdYlGn_r",
+                    axis=None,
+                    vmin=1,
+                    vmax=max(1, int(prob_pct.values.max())),
+                ).format("{:d}"),
+                use_container_width=True,
+                height=calc_table_height(len(prob_pct)),
+                column_config=sim_col_config,
+            )
+
+            st.markdown("---")
+            st.subheader("Title Odds Trajectory Over the Season")
+            title_traj = season_preds[season_preds["Position"] == 1].copy()
+            if selected_managers:
+                title_traj = title_traj[title_traj["Player"].isin(selected_managers)]
+            title_traj["Win_Pct"] = (title_traj["Odds"] * 100).round(1)
+            ordered_sim_names = list(order)
+
+            title_vega = {
+                "mark": {"type": "line", "point": True},
+                "encoding": {
+                    "x": {
+                        "field": "Gameweek",
+                        "type": "ordinal",
+                        "title": "Gameweek",
+                        "axis": {"labelAngle": 0},
+                    },
+                    "y": {
+                        "field": "Win_Pct",
+                        "type": "quantitative",
+                        "title": "1st Place Probability (%)",
+                    },
+                    "color": {
+                        "field": "Player",
+                        "type": "nominal",
+                        "title": "Manager",
+                        "sort": ordered_sim_names,
+                        "legend": {
+                            "orient": "bottom",
+                            "columns": 4,
+                            "labelLimit": 160,
+                            "symbolLimit": 50,
+                        },
+                    },
+                    "tooltip": [
+                        {"field": "Player", "type": "nominal", "title": "Manager"},
+                        {"field": "Gameweek", "type": "ordinal", "title": "GW"},
+                        {"field": "Win_Pct", "type": "quantitative", "title": "Win %"},
+                    ],
+                },
+                "height": 440,
+            }
+            st.vega_lite_chart(title_traj, title_vega, use_container_width=True)
+        else:
+            st.info(f"No simulation predictions found for season {selected_season}.")
+    else:
+        st.info(
+            f"Could not find `{PREDICTIONS_PATH}`. Run `simulate_season.py` to generate end-of-season predictions."
+        )
 
 with tab_alltime:
     st.subheader("Multi-Season Summary (All Available Seasons)")

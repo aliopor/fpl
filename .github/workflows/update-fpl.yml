@@ -2,10 +2,8 @@ name: Update FPL League Scores
 
 on:
   schedule:
-    # Runs at 08:00 UTC (7:00 PM AEDT) on Mon, Tue, Fri, Sat, Sun
-    # Adjust times/days to match when FPL finalizes gameweeks & bonus points
     - cron: "0 8 * * 1,2,5,6,7"
-  workflow_dispatch: {} # Lets you trigger a manual run anytime from the Actions tab
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -26,19 +24,22 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas
+          pip install requests pandas numpy
 
       - name: Download & overwrite active season scores
         run: python update_fpl_data.py
+
+      - name: Run end-of-season Monte Carlo simulation
+        run: python simulate_season.py
 
       - name: Commit and push if data changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/fpl_history.csv
+          git add data/fpl_history.csv data/predictions.csv
           if git diff --staged --quiet; then
-            echo "No changes to data/fpl_history.csv."
+            echo "No changes to data files."
           else
-            git commit -m "chore(fpl): refresh 2026-2027 league scores"
+            git commit -m "chore(fpl): refresh 2026-2027 scores and season predictions"
             git push
           fi
